@@ -4,6 +4,8 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import train_test_split
 
+from airpulse.defs.postgres import PostgresResource
+
 LAGS = 3
 # Each site needs LAGS+1 consecutive hourly readings to yield one training row,
 # so the model only trains once enough history has accumulated.
@@ -20,21 +22,28 @@ def make_lag_features(df: pd.DataFrame, target: str, lags: int = LAGS) -> pd.Dat
     return df.dropna(subset=[target, *lag_cols])
 
 
-@dg.asset(group_name="ml")
+@dg.asset(group_name="ml", deps=["air_quality_history"])
 def model_predictions(
     context: dg.AssetExecutionContext,
-    air_quality_history: pd.DataFrame,
+    postgres: PostgresResource,
 ) -> dict:
     """Forecast pm2.5 from its own recent lags, trained on accumulated history.
-    Returns a status='insufficient_data' result (rather than crashing) until
-    enough hourly snapshots have been collected to build lag features."""
-    n_timestamps = (
-        int(air_quality_history["publishtime"].nunique())
-        if len(air_quality_history)
-        else 0
+
+    Reads the durable history table directly (the source of truth for the
+    cross-run accumulated series) rather than receiving it through the IO
+    manager, which is ephemeral on serverless. Returns
+    status='insufficient_data' instead of crashing until enough hourly
+    snapshots have been collected to build lag features."""
+    engine = postgres.get_engine()
+    history = pd.read_sql(
+        "SELECT sitename, publishtime, pm25 FROM air_quality_history", engine
     )
 
-    feat = make_lag_features(air_quality_history.copy(), target="pm25")
+    n_timestamps = (
+        int(history["publishtime"].nunique()) if len(history) else 0
+    )
+
+    feat = make_lag_features(history.copy(), target="pm25")
 
     if len(feat) < MIN_FEATURE_ROWS:
         result = {
