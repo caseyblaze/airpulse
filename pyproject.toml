@@ -4,7 +4,7 @@ requires-python = ">=3.10,<3.15"
 version = "0.1.0"
 dependencies = [
     "dagster",
-    "dagster-cloud>=1.13.7",
+    "dagster-cloud[serverless]>=1.13.7",
     "pandas>=2.3.3",
     "psycopg2-binary>=2.9.12",
     "requests>=2.34.2",
