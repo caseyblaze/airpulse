@@ -13,7 +13,11 @@ FRESHNESS_HOURS = 3
 AQI_MIN, AQI_MAX = 0, 500  # EPA AQI scale bounds
 
 
-@dg.asset_check(asset="raw_air_quality", description="Ingestion returned rows.")
+@dg.asset_check(
+    asset="raw_air_quality",
+    description="Ingestion returned rows.",
+    blocking=True,
+)
 def raw_not_empty(raw_air_quality: pd.DataFrame) -> dg.AssetCheckResult:
     n = len(raw_air_quality)
     return dg.AssetCheckResult(
@@ -26,6 +30,7 @@ def raw_not_empty(raw_air_quality: pd.DataFrame) -> dg.AssetCheckResult:
 @dg.asset_check(
     asset="cleaned_air_quality",
     description="Required identity fields (sitename, publishtime) are present.",
+    blocking=True,
 )
 def no_missing_keys(cleaned_air_quality: pd.DataFrame) -> dg.AssetCheckResult:
     missing = int(
@@ -41,6 +46,7 @@ def no_missing_keys(cleaned_air_quality: pd.DataFrame) -> dg.AssetCheckResult:
 @dg.asset_check(
     asset="cleaned_air_quality",
     description="pm2.5 is non-negative (negative concentration is impossible).",
+    blocking=True,
 )
 def pm25_non_negative(cleaned_air_quality: pd.DataFrame) -> dg.AssetCheckResult:
     col = cleaned_air_quality.get("pm2.5")
@@ -99,8 +105,10 @@ def data_is_fresh(cleaned_air_quality: pd.DataFrame) -> dg.AssetCheckResult:
     asset="model_metrics",
     description=(
         "Model MAE has not drifted beyond threshold vs the previous trained "
-        "run. ERROR severity so a Dagster+ alert policy can page on drift."
+        "run. ERROR + blocking so a failed drift gate fails the run and pages "
+        "via the Slack run-failure sensor."
     ),
+    blocking=True,
 )
 def model_not_drifting(postgres: PostgresResource) -> dg.AssetCheckResult:
     """Surface the drift_flag already persisted by model_metrics as a check,
