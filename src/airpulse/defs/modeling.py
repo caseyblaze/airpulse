@@ -4,21 +4,54 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import train_test_split
 
+LAGS = 3
+# Each site needs LAGS+1 consecutive hourly readings to yield one training row,
+# so the model only trains once enough history has accumulated.
+MIN_FEATURE_ROWS = 30
 
-def make_lag_features(df: pd.DataFrame, target: str, lags: int = 3) -> pd.DataFrame:
+
+def make_lag_features(df: pd.DataFrame, target: str, lags: int = LAGS) -> pd.DataFrame:
+    df = df.sort_values(["sitename", "publishtime"])
+    lag_cols = []
     for i in range(1, lags + 1):
-        df[f"{target}_lag{i}"] = df.groupby("sitename")[target].shift(i)
-    return df.dropna()
+        col = f"{target}_lag{i}"
+        df[col] = df.groupby("sitename")[target].shift(i)
+        lag_cols.append(col)
+    return df.dropna(subset=[target, *lag_cols])
 
 
 @dg.asset(group_name="ml")
-def model_predictions(cleaned_air_quality: pd.DataFrame) -> dict:
-    df = make_lag_features(cleaned_air_quality.copy(), target="pm2.5", lags=3)
+def model_predictions(
+    context: dg.AssetExecutionContext,
+    air_quality_history: pd.DataFrame,
+) -> dict:
+    """Forecast pm2.5 from its own recent lags, trained on accumulated history.
+    Returns a status='insufficient_data' result (rather than crashing) until
+    enough hourly snapshots have been collected to build lag features."""
+    n_timestamps = (
+        int(air_quality_history["publishtime"].nunique())
+        if len(air_quality_history)
+        else 0
+    )
 
-    feature_cols = ["pm2.5_lag1", "pm2.5_lag2", "pm2.5_lag3"]
-    X = df[feature_cols]
-    y = df["pm2.5"]
+    feat = make_lag_features(air_quality_history.copy(), target="pm25")
 
+    if len(feat) < MIN_FEATURE_ROWS:
+        result = {
+            "status": "insufficient_data",
+            "n_feature_rows": int(len(feat)),
+            "n_timestamps": n_timestamps,
+            "mae": None,
+            "r2": None,
+            "n_train": 0,
+            "n_test": 0,
+        }
+        context.add_output_metadata(result)
+        return result
+
+    feature_cols = [f"pm25_lag{i}" for i in range(1, LAGS + 1)]
+    X = feat[feature_cols]
+    y = feat["pm25"]
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, shuffle=False
     )
@@ -27,9 +60,13 @@ def model_predictions(cleaned_air_quality: pd.DataFrame) -> dict:
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
 
-    return {
-        "mae": mean_absolute_error(y_test, y_pred),
-        "r2": r2_score(y_test, y_pred),
-        "n_train": len(X_train),
-        "n_test": len(X_test),
+    result = {
+        "status": "ok",
+        "mae": float(mean_absolute_error(y_test, y_pred)),
+        "r2": float(r2_score(y_test, y_pred)),
+        "n_train": int(len(X_train)),
+        "n_test": int(len(X_test)),
+        "n_timestamps": n_timestamps,
     }
+    context.add_output_metadata(result)
+    return result

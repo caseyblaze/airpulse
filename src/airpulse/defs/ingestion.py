@@ -15,5 +15,8 @@ def raw_air_quality() -> pd.DataFrame:
         timeout=30,
     )
     resp.raise_for_status()
-    records = resp.json().get("records", [])
+    # The MOENV v2 API returns a bare JSON list of station records; older/other
+    # endpoints wrap them under a "records" key, so handle both shapes.
+    payload = resp.json()
+    records = payload.get("records", []) if isinstance(payload, dict) else payload
     return pd.DataFrame(records)

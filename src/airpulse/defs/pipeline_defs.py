@@ -10,6 +10,7 @@ def defs() -> dg.Definitions:
         selection=[
             "raw_air_quality",
             "cleaned_air_quality",
+            "air_quality_history",
             "model_predictions",
             "model_metrics",
         ],
