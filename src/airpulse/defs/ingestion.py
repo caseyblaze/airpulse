@@ -7,7 +7,17 @@ import requests
 EPA_API_URL = "https://data.moenv.gov.tw/api/v2/aqx_p_432"
 
 
-@dg.asset(group_name="raw")
+@dg.asset(
+    group_name="raw",
+    # The EPA endpoint is an external dependency prone to transient timeouts /
+    # 5xx; back off and retry rather than failing the whole run.
+    retry_policy=dg.RetryPolicy(
+        max_retries=3,
+        delay=10,  # seconds, grows exponentially: ~10s, 20s, 40s
+        backoff=dg.Backoff.EXPONENTIAL,
+        jitter=dg.Jitter.PLUS_MINUS,
+    ),
+)
 def raw_air_quality() -> pd.DataFrame:
     resp = requests.get(
         EPA_API_URL,
