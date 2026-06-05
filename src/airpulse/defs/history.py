@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import text
 
+from airpulse.defs.governance import DATA_OWNER, PUBLIC_TAGS
 from airpulse.defs.postgres import PostgresResource
 
 # pm2.5 -> pm25 so every stored column is a valid SQL identifier
@@ -29,7 +30,13 @@ CREATE TABLE IF NOT EXISTS air_quality_history (
 """
 
 
-@dg.asset(group_name="clean")
+@dg.asset(
+    group_name="clean",
+    description="Durable accumulated time series; each snapshot upserted to postgres.",
+    kinds={"pandas", "postgres"},
+    owners=[DATA_OWNER],
+    tags=PUBLIC_TAGS,
+)
 def air_quality_history(
     context: dg.AssetExecutionContext,
     cleaned_air_quality: pd.DataFrame,

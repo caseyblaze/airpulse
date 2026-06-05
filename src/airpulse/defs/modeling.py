@@ -4,6 +4,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import train_test_split
 
+from airpulse.defs.governance import DATA_OWNER, PUBLIC_TAGS
 from airpulse.defs.postgres import PostgresResource
 
 LAGS = 3
@@ -22,7 +23,14 @@ def make_lag_features(df: pd.DataFrame, target: str, lags: int = LAGS) -> pd.Dat
     return df.dropna(subset=[target, *lag_cols])
 
 
-@dg.asset(group_name="ml", deps=["air_quality_history"])
+@dg.asset(
+    group_name="ml",
+    deps=["air_quality_history"],
+    description="Random-forest pm2.5 forecast from lag features over accumulated history.",
+    kinds={"sklearn"},
+    owners=[DATA_OWNER],
+    tags=PUBLIC_TAGS,
+)
 def model_predictions(
     context: dg.AssetExecutionContext,
     postgres: PostgresResource,

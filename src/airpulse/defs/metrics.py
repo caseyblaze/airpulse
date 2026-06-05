@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import dagster as dg
 from sqlalchemy import text
 
+from airpulse.defs.governance import DATA_OWNER, PUBLIC_TAGS
 from airpulse.defs.postgres import PostgresResource
 
 DRIFT_THRESHOLD = 0.15  # flag if MAE degrades more than 15% vs last trained run
@@ -22,7 +23,13 @@ CREATE TABLE IF NOT EXISTS model_metrics (
 """
 
 
-@dg.asset(group_name="ml")
+@dg.asset(
+    group_name="ml",
+    description="Persists model metrics each run and flags MAE drift vs last trained run.",
+    kinds={"postgres"},
+    owners=[DATA_OWNER],
+    tags=PUBLIC_TAGS,
+)
 def model_metrics(
     context: dg.AssetExecutionContext,
     model_predictions: dict,
