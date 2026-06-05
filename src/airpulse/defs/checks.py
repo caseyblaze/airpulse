@@ -5,6 +5,9 @@ from datetime import datetime, timedelta, timezone
 
 import dagster as dg
 import pandas as pd
+from sqlalchemy import text
+
+from airpulse.defs.postgres import PostgresResource
 
 FRESHNESS_HOURS = 3
 AQI_MIN, AQI_MAX = 0, 500  # EPA AQI scale bounds
@@ -89,4 +92,40 @@ def data_is_fresh(cleaned_air_quality: pd.DataFrame) -> dg.AssetCheckResult:
             "latest_reading": str(latest),
             "age_hours": round(age_hours, 2) if age_hours is not None else "n/a",
         },
+    )
+
+
+@dg.asset_check(
+    asset="model_metrics",
+    description=(
+        "Model MAE has not drifted beyond threshold vs the previous trained "
+        "run. ERROR severity so a Dagster+ alert policy can page on drift."
+    ),
+)
+def model_not_drifting(postgres: PostgresResource) -> dg.AssetCheckResult:
+    """Surface the drift_flag already persisted by model_metrics as a check,
+    turning silent drift into an alertable governance gate."""
+    engine = postgres.get_engine()
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(
+                "SELECT status, mae, drift_flag FROM model_metrics "
+                "ORDER BY run_at DESC LIMIT 1"
+            )
+        ).fetchone()
+
+    # No trained model yet (cold start): nothing to judge, pass as a WARN-level
+    # informational result rather than a hard gate.
+    if row is None or row[0] != "ok":
+        return dg.AssetCheckResult(
+            passed=True,
+            severity=dg.AssetCheckSeverity.WARN,
+            metadata={"status": row[0] if row else "no_runs"},
+        )
+
+    status, mae, drift_flag = row
+    return dg.AssetCheckResult(
+        passed=not drift_flag,
+        severity=dg.AssetCheckSeverity.ERROR,
+        metadata={"latest_mae": mae, "drift_flag": bool(drift_flag)},
     )
