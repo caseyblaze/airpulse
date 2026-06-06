@@ -30,3 +30,18 @@ def add_rolling_features(df: pd.DataFrame, col: str = "pm25", window: int = 3) -
     df[f"{col}_roll{window}_mean"] = df[lag_cols].mean(axis=1, skipna=False)
     df[f"{col}_roll{window}_std"] = df[lag_cols].std(axis=1, skipna=False)
     return df
+
+
+def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Cyclical hour/day-of-week/month encodings from publishtime (same-hour,
+    known at prediction time)."""
+    df = df.copy()
+    t = pd.to_datetime(df["publishtime"])
+    for name, values, period in [
+        ("hour", t.dt.hour, 24),
+        ("dow", t.dt.dayofweek, 7),
+        ("month", t.dt.month, 12),
+    ]:
+        df[f"{name}_sin"] = np.sin(2 * np.pi * values / period)
+        df[f"{name}_cos"] = np.cos(2 * np.pi * values / period)
+    return df

@@ -75,3 +75,16 @@ def test_add_rolling_features_uses_only_lags():
     assert a.loc[3, "pm25_roll3_mean"] == 1.0
     assert pd.isna(a.loc[2, "pm25_roll3_mean"])
     assert "pm25_roll3_std" in a.columns
+
+
+from airpulse.defs.features import add_time_features
+
+
+def test_add_time_features_are_cyclical_and_bounded():
+    df = pd.DataFrame({"publishtime": pd.to_datetime(["2026-06-06 00:00:00", "2026-06-06 12:00:00"])})
+    out = add_time_features(df)
+    for c in ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "month_sin", "month_cos"]:
+        assert c in out.columns
+        assert out[c].between(-1.0, 1.0).all()
+    assert abs(out.loc[0, "hour_sin"] - 0.0) < 1e-9
+    assert abs(out.loc[0, "hour_cos"] - 1.0) < 1e-9
