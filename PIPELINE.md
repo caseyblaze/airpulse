@@ -7,6 +7,7 @@
 1. [每小時 Ingestion Job 結構](#1-每小時-ingestion-job-結構)
 2. [資料清洗方式](#2-資料清洗方式)
 3. [Schema Validation Layer 結構](#3-schema-validation-layer-結構)
+4. [ML 建模層](#4-ml-建模層)
 
 ---
 
@@ -38,10 +39,10 @@ cleaned_air_quality        (group: clean) ← 清洗 + 型別轉換
 air_quality_history        (group: clean) ← upsert 累積至 PostgreSQL，回傳完整歷史
         │
         ▼
-model_predictions          (group: ml)    ← 由 PostgreSQL 讀歷史，建 lag 特徵預測 pm2.5
+model_predictions          (group: ml)    ← 讀歷史，防洩漏特徵 + 時序切分，RF 預測 pm2.5
         │
         ▼
-model_metrics              (group: ml)    ← 寫入 MAE / R² / drift 指標
+model_metrics              (group: ml)    ← 整體 + 逐站指標(MAE/R²/相對誤差) 與 drift
 ```
 
 ### 1.3 各 Asset 職責
@@ -50,9 +51,9 @@ model_metrics              (group: ml)    ← 寫入 MAE / R² / drift 指標
 | --- | --- | --- |
 | `raw_air_quality` | api, python | GET `aqx_p_432`（limit 1000），回傳原始 DataFrame |
 | `cleaned_air_quality` | pandas | 去除缺漏鍵、數值欄位強制轉型、時間排序 |
-| `air_quality_history` | pandas, postgres | 將本次快照 upsert 進歷史表，回傳累積時間序列 |
-| `model_predictions` | sklearn | 由歷史表建 lag 特徵，隨機森林預測 pm2.5 |
-| `model_metrics` | postgres | 持久化模型指標並標記 drift |
+| `air_quality_history` | pandas, postgres | 將本次快照 upsert 進(加寬的)歷史表，回傳累積時間序列 |
+| `model_predictions` | sklearn | 讀累積歷史，建防洩漏特徵、時序切分、RF 預測 pm2.5，輸出整體 + 逐站指標 |
+| `model_metrics` | postgres | 持久化整體指標(含 `relative_mae`) + 逐站表，並以相對誤差判斷 drift |
 
 ### 1.4 Ingestion 細節（`raw_air_quality`）
 
@@ -100,8 +101,12 @@ model_metrics              (group: ml)    ← 寫入 MAE / R² / drift 指標
 2. **數值欄位強制轉型**:對下列欄位套用 `pd.to_numeric(errors="coerce")`，將
    非數值（如 EPA 以 `"--"` 表示的無資料）轉為 `NaN`:
 
-   ```
-   NUMERIC_COLS = ["pm2.5", "pm10", "o3", "co", "so2", "no2", "aqi"]
+   ```python
+   NUMERIC_COLS = [
+       "pm2.5", "pm10", "o3", "co", "so2", "no2", "aqi",
+       "pm2.5_avg", "pm10_avg", "o3_8hr", "co_8hr", "so2_avg",
+       "no", "nox", "wind_speed", "wind_direc", "latitude", "longitude",
+   ]
    ```
 
 3. **時間欄位解析**:`pd.to_datetime(df["publishtime"])`（原始格式如
@@ -118,11 +123,14 @@ model_metrics              (group: ml)    ← 寫入 MAE / R² / drift 指標
 
 此 asset 是 pipeline 的**持久化狀態層**與單一事實來源（source of truth）:
 
-1. **欄位名正規化**:將 `pm2.5` 改名為 `pm25`，使每個欄位都是合法 SQL 識別字:
+1. **欄位名正規化**:將含點號的 API 欄位改成合法 SQL 識別字（`pm2.5 → pm25`、
+   `pm2.5_avg → pm25_avg`）。歷史表儲存**全部**原始欄位（污染物、均值/8hr、前驅物、
+   氣象、地理），作為下游建特徵的原料:
 
    ```python
-   COL_MAP = {"pm2.5": "pm25", "pm10": "pm10", "o3": "o3",
-              "co": "co", "so2": "so2", "no2": "no2", "aqi": "aqi"}
+   COL_MAP = {"pm2.5": "pm25", "pm2.5_avg": "pm25_avg",
+              "wind_speed": "wind_speed", "wind_direc": "wind_direc",
+              "latitude": "latitude", "longitude": "longitude", ...}  # 共 18 個數值欄
    ```
 
 2. **NaN → SQL NULL**:`snap.replace({np.nan: None})`，避免寫入時型別問題。
@@ -139,12 +147,19 @@ model_metrics              (group: ml)    ← 寫入 MAE / R² / drift 指標
 ```sql
 CREATE TABLE IF NOT EXISTS air_quality_history (
     sitename     TEXT NOT NULL,
+    siteid       TEXT,
     county       TEXT,
     publishtime  TIMESTAMP NOT NULL,
     pm25 FLOAT, pm10 FLOAT, o3 FLOAT, co FLOAT, so2 FLOAT, no2 FLOAT, aqi FLOAT,
+    pm25_avg FLOAT, pm10_avg FLOAT, o3_8hr FLOAT, co_8hr FLOAT, so2_avg FLOAT,
+    no FLOAT, nox FLOAT, wind_speed FLOAT, wind_direc FLOAT,
+    latitude FLOAT, longitude FLOAT,
     PRIMARY KEY (sitename, publishtime)
 )
 ```
+
+> 加寬欄位時對既有資料表以 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 做冪等遷移，
+> 不會遺失已累積的歷史。
 
 ---
 
@@ -171,7 +186,7 @@ materialize 時自動執行，並在 Dagster catalog 以通過／失敗標記呈
 | `pm25_non_negative` | `cleaned_air_quality` | ERROR | ✅ | `pm2.5` ≥ 0（負濃度不可能） |
 | `aqi_in_range` | `cleaned_air_quality` | WARN | ✗ | `aqi` 落在 0–500（EPA AQI 範圍） |
 | `data_is_fresh` | `cleaned_air_quality` | WARN | ✗ | 最新讀數距今 ≤ 3 小時 |
-| `model_not_drifting` | `model_metrics` | ERROR | ✅ | 最新 MAE 未較前次訓練漂移逾門檻 |
+| `model_not_drifting` | `model_metrics` | ERROR | ✅ | 最新相對誤差未較近 3 次中位數惡化逾門檻（見 §4.4） |
 
 關鍵常數:`FRESHNESS_HOURS = 3`、`AQI_MIN, AQI_MAX = 0, 500`、drift 門檻 15%
 （`DRIFT_THRESHOLD`，定義於 `metrics.py`）。
@@ -187,6 +202,9 @@ Dagster catalog 顯示完整欄位文件:
 | `county` | string | 行政區（縣市） |
 | `publishtime` | datetime | 觀測時間戳 |
 | `pm2.5` / `pm10` / `o3` / `co` / `so2` / `no2` / `aqi` | float | 污染物濃度／指標 |
+| `pm2.5_avg` / `pm10_avg` / `o3_8hr` / `co_8hr` / `so2_avg` | float | 移動平均／8 小時值 |
+| `no` / `nox` / `wind_speed` / `wind_direc` | float | 前驅物與氣象 |
+| `latitude` / `longitude` | float | 測站地理座標 |
 
 ### 3.4 容錯防呆
 
@@ -209,8 +227,82 @@ Dagster catalog 顯示完整欄位文件:
 
 ---
 
+## 4. ML 建模層
+
+`model_predictions`（`modeling.py`）與 `model_metrics`（`metrics.py`）構成建模與監控
+層。完整設計理由見 [`MODELING_PLAN.md`](./MODELING_PLAN.md);以下為實際實作。
+
+### 4.1 預測目標與資料切分
+
+- **目標**:預測各測站「下一小時」的 pm2.5。
+- **時序切分（temporal split）**:取所有不同 `publishtime` 排序，最後 20% 的時間點
+  為測試集、其餘較早時間為訓練集（`features.temporal_split`）。所有測站同時出現在
+  訓練與測試，差別只在「測試是較晚的時間」——評估的是真正的未來表現，**無時間洩漏**。
+- **冷啟動門檻**:`MIN_TIMESTAMPS = 12`;不足時回傳 `status="insufficient_data"`
+  而非報錯。v1 採全歷史訓練（資料尚少;滾動訓練窗口留待 v2）。
+
+### 4.2 特徵工程（`features.py`，防洩漏）
+
+> **鐵律**:外生變數（其他污染物、氣象）一律只用 **lag** 版本（預測時點拿不到當期值）;
+> 只有**時間、地理**這類「預測時已知」的特徵可用同期值。
+
+| 群組 | 特徵 |
+| --- | --- |
+| 自迴歸 | `pm25_lag1/2/3` |
+| 滾動統計 | `pm25_roll3_mean`、`pm25_roll3_std`（由 lag 計算，`skipna=False`） |
+| 同期污染物（lag1） | `pm10`、`o3`、`co`、`so2`、`no2`、`nox`、`no`、`aqi` 的 `_lag1` |
+| 均值／8hr（lag1） | `pm25_avg`、`pm10_avg`、`o3_8hr`、`co_8hr`、`so2_avg` 的 `_lag1` |
+| 氣象（lag1） | `wind_speed_lag1`、風向 `wind_dir_sin/cos_lag1`（環形編碼） |
+| 時間（同期） | `hour`／`dow`／`month` 的 sin/cos 環形編碼 |
+| 地理（同期） | `latitude`、`longitude` |
+| 站別（同期） | `county` one-hot |
+
+- **核心要求 + 補值**:只要求核心訊號（target + pm25 lags）非空;稀疏外生欄位保留
+  NaN，於切分後用**訓練集中位數**補值（`impute_features`，整欄全缺退回 0），避免單一
+  全缺的 EPA 欄位把整批資料清空（此為實際踩過的 bug）。
+
+### 4.3 模型與評估指標
+
+- **模型**:`RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)`，
+  84 個測站共用單一模型（跨站學習）。
+- **指標**（寫入 `model_metrics`）:
+  - `mae`、`r2`
+  - `relative_mae = mae / 測試期實際 pm2.5 平均`——跨不同難易時段可比
+  - `n_train`、`n_test`、`n_timestamps`、`n_features`
+- **逐站表現**:在測試集 `groupby("sitename")` 算各站 `mae` / `relative_mae` /
+  `n_test`，寫入 `model_metrics_by_site` 表。
+
+### 4.4 模型漂移偵測（drift）
+
+```
+relative_mae = mae / mean(測試期 pm2.5)
+baseline     = median(最近 3 次的 relative_mae)
+drift_flag   = (relative_mae - baseline) / baseline > 0.15   # DRIFT_THRESHOLD
+```
+
+- 用**相對誤差**而非原始 MAE，避免把「該時段本來就難預測」誤判為模型退化。
+- 用**近 3 次中位數**當基準，平滑單次雜訊;不採固定 baseline（需精確定義「穩定」，
+  留待 v2）。
+- `drift_flag` 由 §3.2 的 `model_not_drifting` check（ERROR + blocking）提升為可告警
+  的治理閘門。
+
+### 4.5 ML 表 Schema
+
+```sql
+-- 整體指標(每次 run 一列)
+model_metrics(run_at, status, mae, r2, relative_mae,
+              n_train, n_test, n_timestamps, drift_flag)
+
+-- 逐站指標(每站一列)
+model_metrics_by_site(run_at, sitename, n_test, mae, relative_mae)
+```
+
+---
+
 ## 相關文件
 
+- ML 建模設計藍圖與取捨:[`MODELING_PLAN.md`](./MODELING_PLAN.md)
 - 資料治理（分類、品質閘門、血緣、擁有權）:[`DATA_GOVERNANCE.md`](./DATA_GOVERNANCE.md)
 - 程式碼位置:`src/airpulse/defs/`（`ingestion` / `cleaning` / `history` /
-  `modeling` / `metrics` / `checks` / `sensors` / `governance` / `postgres`）
+  `modeling` / `metrics` / `features` / `evaluation` / `checks` / `sensors` /
+  `governance` / `postgres`）
