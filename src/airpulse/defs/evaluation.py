@@ -5,10 +5,10 @@ from sklearn.metrics import mean_absolute_error
 
 def relative_mae(y_true, y_pred):
     """MAE normalized by the mean of actuals; comparable across test windows
-    of differing difficulty. None if the mean is zero."""
+    of differing difficulty. None if the mean is not strictly positive."""
     mae = mean_absolute_error(y_true, y_pred)
     denom = float(np.mean(y_true))
-    return float(mae / denom) if denom else None
+    return float(mae / denom) if denom > 0 else None
 
 
 def per_site_metrics(sitenames, y_true, y_pred):
@@ -25,7 +25,7 @@ def per_site_metrics(sitenames, y_true, y_pred):
                 "sitename": site,
                 "n_test": int(len(g)),
                 "mae": mae,
-                "relative_mae": (mae / denom) if denom else None,
+                "relative_mae": float(mae / denom) if denom > 0 else None,
             }
         )
     return out

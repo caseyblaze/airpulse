@@ -8,6 +8,10 @@ def test_relative_mae_divides_by_mean_actual():
     assert abs(relative_mae([10, 10], [9, 11]) - 0.1) < 1e-9
     # zero mean -> None (avoid div by zero)
     assert relative_mae([0, 0], [1, -1]) is None
+    # non-positive mean -> None (defensive)
+    assert relative_mae([-4, -4], [0, 0]) is None
+    # valid result is a plain float
+    assert isinstance(relative_mae([10, 10], [9, 11]), float)
 
 
 def test_per_site_metrics_groups_by_site():
@@ -18,7 +22,15 @@ def test_per_site_metrics_groups_by_site():
     assert out["A"]["n_test"] == 2
     assert abs(out["A"]["mae"] - 1.0) < 1e-9
     assert abs(out["A"]["relative_mae"] - 0.1) < 1e-9
+    # relative_mae is a plain float for consistency with the overall metric
+    assert isinstance(out["A"]["relative_mae"], float)
     assert out["B"]["n_test"] == 1
+
+
+def test_per_site_metrics_handles_nonpositive_mean():
+    out = {r["sitename"]: r for r in per_site_metrics(["C", "C"], [0.0, 0.0], [1.0, -1.0])}
+    assert out["C"]["relative_mae"] is None
+    assert isinstance(out["C"]["mae"], float)
 
 
 def test_compute_drift_uses_median_of_recent():

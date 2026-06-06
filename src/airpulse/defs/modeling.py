@@ -65,7 +65,7 @@ def model_predictions(
     X_train, X_test = impute_features(train, test, feature_cols)
     y_train, y_test = train["pm25"], test["pm25"]
 
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
 

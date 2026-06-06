@@ -118,7 +118,7 @@ def build_feature_matrix(history: pd.DataFrame):
         + [f"{c}_lag1" for c in EXO_COLS if c in history.columns]
         + (["wind_dir_sin_lag1", "wind_dir_cos_lag1"] if "wind_direc" in history.columns else [])
         + ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "month_sin", "month_cos"]
-        + [c for c in GEO_COLS if c in df.columns]
+        + [c for c in GEO_COLS if c in history.columns]
         + county_cols
     )
 
