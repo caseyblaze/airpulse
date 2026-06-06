@@ -69,6 +69,9 @@ def temporal_split(df: pd.DataFrame, test_frac: float = 0.2):
     """Global timestamp cutoff: the latest `test_frac` of distinct timestamps
     is the test set; train is strictly earlier. Returns (train_df, test_df)."""
     times = np.sort(df["publishtime"].unique())
+    if len(times) == 0:
+        empty = df.iloc[0:0]
+        return empty, empty
     n_test = max(1, int(round(len(times) * test_frac)))
     cutoff = times[-n_test]
     train = df[df["publishtime"] < cutoff]
@@ -76,12 +79,24 @@ def temporal_split(df: pd.DataFrame, test_frac: float = 0.2):
     return train, test
 
 
+def impute_features(train: pd.DataFrame, test: pd.DataFrame, feature_cols):
+    """Fill missing feature values with TRAIN-set medians (no test leakage),
+    falling back to 0.0 for columns that are entirely missing. Returns
+    (X_train, X_test) ready for the model."""
+    medians = train[feature_cols].median()
+    x_train = train[feature_cols].fillna(medians).fillna(0.0)
+    x_test = test[feature_cols].fillna(medians).fillna(0.0)
+    return x_train, x_test
+
+
 def build_feature_matrix(history: pd.DataFrame):
     """Assemble the leakage-safe feature matrix from accumulated history.
 
     Returns (feat_df, feature_cols). Exogenous pollutants/meteorology enter
-    only as lag-1; only time and geo features use the same-hour value. Rows
-    without complete features (cold start) are dropped."""
+    only as lag-1; only time and geo features use the same-hour value. Only the
+    core autoregressive signal (target + its lags) is required; sparse
+    exogenous fields keep NaN and are imputed at train time (see
+    impute_features) so a single all-missing EPA column can't wipe every row."""
     df = history.copy()
     df["publishtime"] = pd.to_datetime(df["publishtime"])
     df = df.sort_values(["sitename", "publishtime"])
@@ -107,5 +122,6 @@ def build_feature_matrix(history: pd.DataFrame):
         + county_cols
     )
 
-    df = df.dropna(subset=[TARGET, *feature_cols])
+    core = [TARGET] + [f"{TARGET}_lag{i}" for i in range(1, TARGET_LAGS + 1)]
+    df = df.dropna(subset=core)
     return df, feature_cols

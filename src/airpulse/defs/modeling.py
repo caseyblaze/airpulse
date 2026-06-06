@@ -4,7 +4,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 
 from airpulse.defs.evaluation import per_site_metrics, relative_mae
-from airpulse.defs.features import build_feature_matrix, temporal_split
+from airpulse.defs.features import build_feature_matrix, impute_features, temporal_split
 from airpulse.defs.governance import DATA_OWNER, PUBLIC_TAGS
 from airpulse.defs.postgres import PostgresResource
 
@@ -55,12 +55,15 @@ def model_predictions(
         return _insufficient(context, n_timestamps, "not_enough_timestamps")
 
     feat, feature_cols = build_feature_matrix(history)
+    if len(feat) == 0:
+        return _insufficient(context, n_timestamps, "no_feature_rows")
+
     train, test = temporal_split(feat, TEST_FRAC)
     if len(train) == 0 or len(test) == 0:
         return _insufficient(context, n_timestamps, "empty_split")
 
-    X_train, y_train = train[feature_cols], train["pm25"]
-    X_test, y_test = test[feature_cols], test["pm25"]
+    X_train, X_test = impute_features(train, test, feature_cols)
+    y_train, y_test = train["pm25"], test["pm25"]
 
     model = RandomForestRegressor(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)

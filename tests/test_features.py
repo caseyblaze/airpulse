@@ -162,3 +162,40 @@ def test_build_feature_matrix_has_no_same_hour_exogenous_leakage():
     assert any(c.startswith("county_") for c in feature_cols)
     assert feat[feature_cols].isna().sum().sum() == 0
     assert len(feat) > 0
+
+
+from airpulse.defs.features import impute_features
+
+
+def test_build_feature_matrix_survives_sparse_exogenous():
+    # Real EPA data has columns that are entirely or partly missing. A fully
+    # missing exogenous column must NOT wipe out every row: only the core
+    # autoregressive signal (target + its lags) is required.
+    h = _wide_history(n_times=8)
+    h["nox"] = np.nan                          # fully-missing exogenous column
+    h.loc[h.index % 2 == 0, "o3"] = np.nan     # sparsely-missing exogenous column
+    feat, feature_cols = build_feature_matrix(h)
+    assert len(feat) > 0
+    for c in ["pm25_lag1", "pm25_lag2", "pm25_lag3"]:
+        assert feat[c].isna().sum() == 0
+
+
+def test_temporal_split_empty_is_safe():
+    empty = pd.DataFrame({"sitename": [], "publishtime": [], "pm25": []})
+    train, test = temporal_split(empty, test_frac=0.2)
+    assert len(train) == 0 and len(test) == 0
+
+
+def test_impute_features_uses_train_medians_and_zero_fallback():
+    cols = ["a", "b"]
+    train = pd.DataFrame({"a": [1.0, 3.0, np.nan], "b": [np.nan, np.nan, np.nan]})
+    test = pd.DataFrame({"a": [np.nan], "b": [np.nan]})
+    x_train, x_test = impute_features(train, test, cols)
+    # train median of a == 2.0 fills NaN in both train and test
+    assert x_train.loc[2, "a"] == 2.0
+    assert x_test.loc[0, "a"] == 2.0
+    # all-NaN column falls back to 0.0
+    assert x_train["b"].tolist() == [0.0, 0.0, 0.0]
+    assert x_test["b"].tolist() == [0.0]
+    # no NaNs remain
+    assert x_train.isna().sum().sum() == 0 and x_test.isna().sum().sum() == 0
