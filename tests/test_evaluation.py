@@ -1,6 +1,11 @@
 import pandas as pd
 
-from airpulse.defs.evaluation import relative_mae, per_site_metrics, compute_drift
+from airpulse.defs.evaluation import (
+    relative_mae,
+    per_site_metrics,
+    compute_drift,
+    sustained_drift,
+)
 
 
 def test_relative_mae_divides_by_mean_actual():
@@ -42,3 +47,18 @@ def test_compute_drift_uses_median_of_recent():
     assert compute_drift(0.50, [], threshold=0.15) is False
     # None current -> no drift
     assert compute_drift(None, [0.10], threshold=0.15) is False
+
+
+def test_sustained_drift_requires_full_streak():
+    # flags are newest-first; streak of 3 all flagged -> sustained
+    assert sustained_drift([True, True, True], streak=3) is True
+    # a transient single spike does not count as sustained
+    assert sustained_drift([True, False, True], streak=3) is False
+    # most-recent run cleared -> not sustained even if older runs drifted
+    assert sustained_drift([False, True, True], streak=3) is False
+    # not enough history to fill the streak -> not sustained
+    assert sustained_drift([True, True], streak=3) is False
+    # only the most recent `streak` runs matter, not older ones
+    assert sustained_drift([True, True, True, False], streak=3) is True
+    # defensive: non-positive streak never alerts
+    assert sustained_drift([True, True, True], streak=0) is False
