@@ -88,3 +88,15 @@ def test_add_time_features_are_cyclical_and_bounded():
         assert out[c].between(-1.0, 1.0).all()
     assert abs(out.loc[0, "hour_sin"] - 0.0) < 1e-9
     assert abs(out.loc[0, "hour_cos"] - 1.0) < 1e-9
+
+
+from airpulse.defs.features import add_wind_direction_features
+
+
+def test_wind_direction_encoded_from_lag():
+    df = pd.DataFrame({"wind_direc_lag1": [0.0, 90.0]})
+    out = add_wind_direction_features(df)
+    assert abs(out.loc[0, "wind_dir_sin_lag1"] - 0.0) < 1e-9
+    assert abs(out.loc[0, "wind_dir_cos_lag1"] - 1.0) < 1e-9
+    assert abs(out.loc[1, "wind_dir_sin_lag1"] - 1.0) < 1e-9
+    assert abs(out.loc[1, "wind_dir_cos_lag1"] - 0.0) < 1e-9

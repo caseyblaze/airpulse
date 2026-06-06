@@ -45,3 +45,13 @@ def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
         df[f"{name}_sin"] = np.sin(2 * np.pi * values / period)
         df[f"{name}_cos"] = np.cos(2 * np.pi * values / period)
     return df
+
+
+def add_wind_direction_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Encode the lagged wind direction (degrees) as sin/cos. Requires
+    `wind_direc_lag1` to already exist."""
+    df = df.copy()
+    rad = np.deg2rad(df["wind_direc_lag1"])
+    df["wind_dir_sin_lag1"] = np.sin(rad)
+    df["wind_dir_cos_lag1"] = np.cos(rad)
+    return df
