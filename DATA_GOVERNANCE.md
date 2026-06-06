@@ -1,5 +1,7 @@
 # Data Governance
 
+> **Language:** English | [繁體中文](DATA_GOVERNANCE.zh-TW.md)
+
 How the **airpulse** pipeline governs the data it ingests, transforms, and
 serves. The current dataset (Taiwan EPA open air-quality data) is **public and
 PII-free**; the framework below is designed so the same pipeline extends
