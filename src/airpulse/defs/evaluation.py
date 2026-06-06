@@ -41,3 +41,15 @@ def compute_drift(current_relative_mae, recent_relative_maes, threshold=0.15):
     if baseline == 0:
         return False
     return (current_relative_mae - baseline) / baseline > threshold
+
+
+def sustained_drift(drift_flags, streak):
+    """True only when the most recent `streak` runs are all flagged for drift.
+
+    `drift_flags` is newest-first. Requiring a full streak filters transient
+    single-run spikes (normal hour-to-hour variance) so only persistent drift
+    raises an alert. False when there isn't enough history to fill the streak.
+    """
+    if streak <= 0 or len(drift_flags) < streak:
+        return False
+    return all(bool(f) for f in drift_flags[:streak])

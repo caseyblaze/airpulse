@@ -7,7 +7,12 @@ from airpulse.defs.evaluation import compute_drift
 from airpulse.defs.governance import DATA_OWNER, PUBLIC_TAGS
 from airpulse.defs.postgres import PostgresResource
 
-DRIFT_THRESHOLD = 0.15  # flag if relative MAE worsens >15% vs median of last 3
+# Flag a run when relative MAE worsens >30% vs the median of a wider baseline
+# window. A wider window + looser threshold ride out normal hour-to-hour
+# variance in the shifting temporal holdout; sustained drift is caught by the
+# streak logic in the model_not_drifting check rather than a single twitchy run.
+DRIFT_THRESHOLD = 0.30
+DRIFT_BASELINE_WINDOW = 12  # trained runs (hours) the baseline median spans
 
 DDL_METRICS = """
 CREATE TABLE IF NOT EXISTS model_metrics (
@@ -60,14 +65,16 @@ def model_metrics(
         conn.execute(text(MIGRATION_METRICS))
         conn.execute(text(DDL_BY_SITE))
 
-        # drift vs median of the last 3 trained relative MAEs
+        # drift vs the median of the last DRIFT_BASELINE_WINDOW trained relative MAEs
         recent = [
             r[0]
             for r in conn.execute(
                 text(
                     "SELECT relative_mae FROM model_metrics "
-                    "WHERE relative_mae IS NOT NULL ORDER BY run_at DESC LIMIT 3"
-                )
+                    "WHERE relative_mae IS NOT NULL "
+                    "ORDER BY run_at DESC LIMIT :window"
+                ),
+                {"window": DRIFT_BASELINE_WINDOW},
             ).fetchall()
         ]
         drift_flag = compute_drift(rel, recent, DRIFT_THRESHOLD)

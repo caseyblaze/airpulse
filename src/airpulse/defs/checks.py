@@ -7,10 +7,12 @@ import dagster as dg
 import pandas as pd
 from sqlalchemy import text
 
+from airpulse.defs.evaluation import sustained_drift
 from airpulse.defs.postgres import PostgresResource
 
 FRESHNESS_HOURS = 3
 AQI_MIN, AQI_MAX = 0, 500  # EPA AQI scale bounds
+DRIFT_ALERT_STREAK = 3  # consecutive flagged runs before drift warns (ignore spikes)
 
 
 @dg.asset_check(
@@ -104,36 +106,45 @@ def data_is_fresh(cleaned_air_quality: pd.DataFrame) -> dg.AssetCheckResult:
 @dg.asset_check(
     asset="model_metrics",
     description=(
-        "Model MAE has not drifted beyond threshold vs the previous trained "
-        "run. ERROR + blocking so a failed drift gate fails the run and pages "
-        "via the Slack run-failure sensor."
+        "Surfaces *sustained* model drift: warns only when the last "
+        f"{DRIFT_ALERT_STREAK} trained runs are all flagged for relative-MAE "
+        "drift, so transient hour-to-hour variance does not page. Non-blocking "
+        "WARN — drift is an investigate/retrain signal, not a reason to fail "
+        "the ingestion run (the metrics row is already persisted)."
     ),
-    blocking=True,
 )
 def model_not_drifting(postgres: PostgresResource) -> dg.AssetCheckResult:
-    """Surface the drift_flag already persisted by model_metrics as a check,
-    turning silent drift into an alertable governance gate."""
+    """Surface the drift_flag persisted by model_metrics as a governance
+    signal, alerting only on a sustained streak rather than a single spike."""
     engine = postgres.get_engine()
     with engine.begin() as conn:
-        row = conn.execute(
+        rows = conn.execute(
             text(
                 "SELECT status, mae, drift_flag FROM model_metrics "
-                "ORDER BY run_at DESC LIMIT 1"
-            )
-        ).fetchone()
+                "ORDER BY run_at DESC LIMIT :n"
+            ),
+            {"n": DRIFT_ALERT_STREAK},
+        ).fetchall()
 
-    # No trained model yet (cold start): nothing to judge, pass as a WARN-level
-    # informational result rather than a hard gate.
-    if row is None or row[0] != "ok":
+    ok_rows = [r for r in rows if r[0] == "ok"]
+    # No trained model yet (cold start): nothing to judge.
+    if not ok_rows:
         return dg.AssetCheckResult(
             passed=True,
             severity=dg.AssetCheckSeverity.WARN,
-            metadata={"status": row[0] if row else "no_runs"},
+            metadata={"status": rows[0][0] if rows else "no_runs"},
         )
 
-    status, mae, drift_flag = row
+    # drift_flags newest-first; a non-"ok" run carries drift_flag False and so
+    # naturally breaks the streak.
+    drifting = sustained_drift([r[2] for r in rows], DRIFT_ALERT_STREAK)
     return dg.AssetCheckResult(
-        passed=not drift_flag,
-        severity=dg.AssetCheckSeverity.ERROR,
-        metadata={"latest_mae": mae, "drift_flag": bool(drift_flag)},
+        passed=not drifting,
+        severity=dg.AssetCheckSeverity.WARN,
+        metadata={
+            "latest_mae": ok_rows[0][1],
+            "latest_drift_flag": bool(ok_rows[0][2]),
+            "alert_streak": DRIFT_ALERT_STREAK,
+            "sustained_drift": drifting,
+        },
     )
