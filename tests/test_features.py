@@ -26,3 +26,18 @@ def test_clean_frame_coerces_all_numeric_and_drops_missing_keys():
     # new meteorology/geo fields are registered as numeric
     assert "wind_speed" in NUMERIC_COLS
     assert "latitude" in NUMERIC_COLS
+
+
+from airpulse.defs.history import COL_MAP, ALL_COLS
+
+
+def test_history_stores_widened_normalized_columns():
+    # dotted API names normalized to valid SQL identifiers
+    assert COL_MAP["pm2.5"] == "pm25"
+    assert COL_MAP["pm2.5_avg"] == "pm25_avg"
+    # new fields are mapped for storage
+    for api_field in ["wind_speed", "wind_direc", "latitude", "longitude", "no", "nox"]:
+        assert api_field in COL_MAP
+    # identity + stored numeric names are all present in ALL_COLS
+    for stored in ["sitename", "siteid", "county", "publishtime", "pm25", "wind_speed", "latitude"]:
+        assert stored in ALL_COLS
