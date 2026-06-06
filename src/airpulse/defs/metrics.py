@@ -3,29 +3,45 @@ from datetime import datetime, timezone
 import dagster as dg
 from sqlalchemy import text
 
+from airpulse.defs.evaluation import compute_drift
 from airpulse.defs.governance import DATA_OWNER, PUBLIC_TAGS
 from airpulse.defs.postgres import PostgresResource
 
-DRIFT_THRESHOLD = 0.15  # flag if MAE degrades more than 15% vs last trained run
+DRIFT_THRESHOLD = 0.15  # flag if relative MAE worsens >15% vs median of last 3
 
-DDL = """
+DDL_METRICS = """
 CREATE TABLE IF NOT EXISTS model_metrics (
     id           SERIAL PRIMARY KEY,
     run_at       TIMESTAMPTZ NOT NULL,
     status       TEXT,
     mae          FLOAT,
     r2           FLOAT,
+    relative_mae FLOAT,
     n_train      INT,
     n_test       INT,
     n_timestamps INT,
     drift_flag   BOOLEAN
 )
 """
+# Migration for tables created before relative_mae existed.
+MIGRATION_METRICS = (
+    "ALTER TABLE model_metrics ADD COLUMN IF NOT EXISTS relative_mae FLOAT"
+)
+DDL_BY_SITE = """
+CREATE TABLE IF NOT EXISTS model_metrics_by_site (
+    id           SERIAL PRIMARY KEY,
+    run_at       TIMESTAMPTZ NOT NULL,
+    sitename     TEXT NOT NULL,
+    n_test       INT,
+    mae          FLOAT,
+    relative_mae FLOAT
+)
+"""
 
 
 @dg.asset(
     group_name="ml",
-    description="Persists model metrics each run and flags MAE drift vs last trained run.",
+    description="Persist overall + per-site metrics and flag relative-MAE drift.",
     kinds={"postgres"},
     owners=[DATA_OWNER],
     tags=PUBLIC_TAGS,
@@ -36,47 +52,68 @@ def model_metrics(
     postgres: PostgresResource,
 ) -> None:
     engine = postgres.get_engine()
-    row = {
-        "run_at": datetime.now(timezone.utc),
-        "status": model_predictions.get("status", "unknown"),
-        "mae": model_predictions.get("mae"),
-        "r2": model_predictions.get("r2"),
-        "n_train": model_predictions.get("n_train", 0),
-        "n_test": model_predictions.get("n_test", 0),
-        "n_timestamps": model_predictions.get("n_timestamps", 0),
-        "drift_flag": False,
-    }
+    run_at = datetime.now(timezone.utc)
+    rel = model_predictions.get("relative_mae")
 
     with engine.begin() as conn:
-        conn.execute(text(DDL))
+        conn.execute(text(DDL_METRICS))
+        conn.execute(text(MIGRATION_METRICS))
+        conn.execute(text(DDL_BY_SITE))
 
-        # drift only makes sense once we actually have a trained MAE to compare
-        if row["mae"] is not None:
-            result = conn.execute(
+        # drift vs median of the last 3 trained relative MAEs
+        recent = [
+            r[0]
+            for r in conn.execute(
                 text(
-                    "SELECT mae FROM model_metrics "
-                    "WHERE mae IS NOT NULL ORDER BY run_at DESC LIMIT 1"
+                    "SELECT relative_mae FROM model_metrics "
+                    "WHERE relative_mae IS NOT NULL ORDER BY run_at DESC LIMIT 3"
                 )
-            ).fetchone()
-            if result and result[0]:
-                baseline_mae = result[0]
-                if (row["mae"] - baseline_mae) / baseline_mae > DRIFT_THRESHOLD:
-                    row["drift_flag"] = True
+            ).fetchall()
+        ]
+        drift_flag = compute_drift(rel, recent, DRIFT_THRESHOLD)
 
         conn.execute(
             text(
                 """
                 INSERT INTO model_metrics
-                    (run_at, status, mae, r2, n_train, n_test,
-                     n_timestamps, drift_flag)
+                    (run_at, status, mae, r2, relative_mae,
+                     n_train, n_test, n_timestamps, drift_flag)
                 VALUES
-                    (:run_at, :status, :mae, :r2, :n_train, :n_test,
-                     :n_timestamps, :drift_flag)
+                    (:run_at, :status, :mae, :r2, :relative_mae,
+                     :n_train, :n_test, :n_timestamps, :drift_flag)
                 """
             ),
-            row,
+            {
+                "run_at": run_at,
+                "status": model_predictions.get("status", "unknown"),
+                "mae": model_predictions.get("mae"),
+                "r2": model_predictions.get("r2"),
+                "relative_mae": rel,
+                "n_train": model_predictions.get("n_train", 0),
+                "n_test": model_predictions.get("n_test", 0),
+                "n_timestamps": model_predictions.get("n_timestamps", 0),
+                "drift_flag": drift_flag,
+            },
         )
 
+        by_site = model_predictions.get("by_site", [])
+        if by_site:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO model_metrics_by_site
+                        (run_at, sitename, n_test, mae, relative_mae)
+                    VALUES (:run_at, :sitename, :n_test, :mae, :relative_mae)
+                    """
+                ),
+                [{"run_at": run_at, **row} for row in by_site],
+            )
+
     context.add_output_metadata(
-        {k: (v if v is not None else "null") for k, v in row.items() if k != "run_at"}
+        {
+            "status": model_predictions.get("status", "unknown"),
+            "relative_mae": rel if rel is not None else "null",
+            "drift_flag": drift_flag,
+            "sites_scored": len(by_site),
+        }
     )
