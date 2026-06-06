@@ -41,3 +41,25 @@ def test_history_stores_widened_normalized_columns():
     # identity + stored numeric names are all present in ALL_COLS
     for stored in ["sitename", "siteid", "county", "publishtime", "pm25", "wind_speed", "latitude"]:
         assert stored in ALL_COLS
+
+
+from airpulse.defs.features import add_lag_features
+
+
+def _two_site_series():
+    times = pd.date_range("2026-06-01", periods=5, freq="h")
+    rows = []
+    for s in ["A", "B"]:
+        for i, t in enumerate(times):
+            rows.append({"sitename": s, "publishtime": t, "pm25": float(i)})
+    return pd.DataFrame(rows)
+
+
+def test_add_lag_features_shifts_within_site():
+    df = add_lag_features(_two_site_series(), "pm25", 2)
+    a = df[df.sitename == "A"].sort_values("publishtime").reset_index(drop=True)
+    assert pd.isna(a.loc[0, "pm25_lag1"])
+    assert pd.isna(a.loc[1, "pm25_lag2"])
+    assert a.loc[2, "pm25_lag1"] == 1.0
+    assert a.loc[2, "pm25_lag2"] == 0.0
+    assert a["pm25_lag1"].dropna().tolist() == [0.0, 1.0, 2.0, 3.0]
