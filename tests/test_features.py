@@ -111,3 +111,18 @@ def test_county_onehot_returns_columns():
     assert set(cols) == {"county_X", "county_Y"}
     assert out["county_X"].tolist() == [1, 0, 1] or out["county_X"].tolist() == [True, False, True]
     assert out.loc[1, "county_Y"] in (1, True)
+
+
+from airpulse.defs.features import temporal_split
+
+
+def test_temporal_split_holds_out_latest_times_without_leakage():
+    times = pd.date_range("2026-06-01", periods=10, freq="h")
+    rows = [{"sitename": s, "publishtime": t, "pm25": 1.0} for s in ["A", "B"] for t in times]
+    df = pd.DataFrame(rows)
+    train, test = temporal_split(df, test_frac=0.2)
+    assert test["publishtime"].nunique() == 2
+    assert train["publishtime"].nunique() == 8
+    assert train["publishtime"].max() < test["publishtime"].min()
+    assert set(train["sitename"]) == {"A", "B"}
+    assert set(test["sitename"]) == {"A", "B"}

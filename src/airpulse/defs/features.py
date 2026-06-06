@@ -63,3 +63,14 @@ def add_county_onehot(df: pd.DataFrame):
     dummies = pd.get_dummies(df["county"], prefix="county")
     df = pd.concat([df, dummies], axis=1)
     return df, list(dummies.columns)
+
+
+def temporal_split(df: pd.DataFrame, test_frac: float = 0.2):
+    """Global timestamp cutoff: the latest `test_frac` of distinct timestamps
+    is the test set; train is strictly earlier. Returns (train_df, test_df)."""
+    times = np.sort(df["publishtime"].unique())
+    n_test = max(1, int(round(len(times) * test_frac)))
+    cutoff = times[-n_test]
+    train = df[df["publishtime"] < cutoff]
+    test = df[df["publishtime"] >= cutoff]
+    return train, test
