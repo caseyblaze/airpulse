@@ -74,3 +74,38 @@ def temporal_split(df: pd.DataFrame, test_frac: float = 0.2):
     train = df[df["publishtime"] < cutoff]
     test = df[df["publishtime"] >= cutoff]
     return train, test
+
+
+def build_feature_matrix(history: pd.DataFrame):
+    """Assemble the leakage-safe feature matrix from accumulated history.
+
+    Returns (feat_df, feature_cols). Exogenous pollutants/meteorology enter
+    only as lag-1; only time and geo features use the same-hour value. Rows
+    without complete features (cold start) are dropped."""
+    df = history.copy()
+    df["publishtime"] = pd.to_datetime(df["publishtime"])
+    df = df.sort_values(["sitename", "publishtime"])
+
+    df = add_lag_features(df, TARGET, TARGET_LAGS)
+    for col in EXO_COLS:
+        if col in df.columns:
+            df = add_lag_features(df, col, 1)
+    if "wind_direc" in df.columns:
+        df = add_lag_features(df, "wind_direc", 1)
+        df = add_wind_direction_features(df)
+    df = add_rolling_features(df, TARGET, 3)
+    df = add_time_features(df)
+    df, county_cols = add_county_onehot(df)
+
+    feature_cols = (
+        [f"{TARGET}_lag{i}" for i in range(1, TARGET_LAGS + 1)]
+        + [f"{TARGET}_roll3_mean", f"{TARGET}_roll3_std"]
+        + [f"{c}_lag1" for c in EXO_COLS if c in history.columns]
+        + (["wind_dir_sin_lag1", "wind_dir_cos_lag1"] if "wind_direc" in history.columns else [])
+        + ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "month_sin", "month_cos"]
+        + [c for c in GEO_COLS if c in df.columns]
+        + county_cols
+    )
+
+    df = df.dropna(subset=[TARGET, *feature_cols])
+    return df, feature_cols

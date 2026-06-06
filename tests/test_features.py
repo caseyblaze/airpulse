@@ -126,3 +126,39 @@ def test_temporal_split_holds_out_latest_times_without_leakage():
     assert train["publishtime"].max() < test["publishtime"].min()
     assert set(train["sitename"]) == {"A", "B"}
     assert set(test["sitename"]) == {"A", "B"}
+
+
+from airpulse.defs.features import build_feature_matrix, EXO_COLS, TARGET
+
+
+def _wide_history(n_times=8):
+    times = pd.date_range("2026-06-01", periods=n_times, freq="h")
+    rows = []
+    for si, s in enumerate(["A", "B"]):
+        for i, t in enumerate(times):
+            row = {
+                "sitename": s, "county": "X", "publishtime": t,
+                "pm25": float(i + si), "latitude": 25.0, "longitude": 121.0,
+                "wind_direc": float((i * 30) % 360),
+            }
+            for c in EXO_COLS:
+                row[c] = float(i + 1)
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def test_build_feature_matrix_has_no_same_hour_exogenous_leakage():
+    feat, feature_cols = build_feature_matrix(_wide_history())
+
+    assert TARGET not in feature_cols
+    for c in EXO_COLS:
+        assert c not in feature_cols
+    assert "wind_direc" not in feature_cols
+    assert "wind_dir_sin_lag1" in feature_cols
+    assert "pm25_lag1" in feature_cols and "pm25_lag3" in feature_cols
+    assert "pm25_roll3_mean" in feature_cols
+    assert "hour_sin" in feature_cols
+    assert "latitude" in feature_cols
+    assert any(c.startswith("county_") for c in feature_cols)
+    assert feat[feature_cols].isna().sum().sum() == 0
+    assert len(feat) > 0
