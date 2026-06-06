@@ -8,9 +8,11 @@ on:
     types: [opened, synchronize, reopened, closed]
 
 concurrency:
-  # Cancel in-progress deploys to same branch
-  group: ${{ github.ref }}/deploy
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Only cancel superseded PR branch-deploys (a newer commit makes the old one
+  # moot). Never cancel a push-to-main run, so the prod deploy can't be killed
+  # by the pull_request:closed run that fires at merge time.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   # The organization name in Dagster Cloud
   DAGSTER_CLOUD_ORGANIZATION: "caseyblaze"
@@ -40,7 +42,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.head_ref }}
+          # On a closed/merged PR the head branch is often already deleted, so
+          # fall back to the base ref for the branch-deployment teardown run.
+          ref: ${{ (github.event_name == 'pull_request' && github.event.action == 'closed') && github.base_ref || github.head_ref }}
 
       # Detect if this is branch deployment and initialize the build session
       - name: Initialize build session
