@@ -162,7 +162,7 @@ pytest
 | --- | --- |
 | [`PIPELINE.zh-TW.md`](./PIPELINE.zh-TW.md) | Pipeline 架構:ingestion、清洗、驗證層、ML 層 |
 | [`DATA_GOVERNANCE.zh-TW.md`](./DATA_GOVERNANCE.zh-TW.md) | 分類、品質閘門、血緣、擁有權、roadmap |
-| [`MODELING_PLAN.zh-TW.md`](./MODELING_PLAN.zh-TW.md) | ML 設計藍圖、取捨與 v2 待辦 |
+| [`MODELING_PLAN.zh-TW.md`](./MODELING_PLAN.zh-TW.md) | ML 設計(已實作):切分、特徵、指標、drift、取捨與 v2 待辦 |
 
 ## Roadmap
 

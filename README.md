@@ -177,7 +177,7 @@ Configuration (Postgres connection, `SLACK_WEBHOOK_URL`) is via environment vari
 | --- | --- |
 | [`PIPELINE.md`](./PIPELINE.md) | Pipeline architecture: ingestion, cleaning, validation layer, ML layer |
 | [`DATA_GOVERNANCE.md`](./DATA_GOVERNANCE.md) | Classification, quality gates, lineage, ownership, roadmap |
-| [`MODELING_PLAN.md`](./MODELING_PLAN.md) | ML design blueprint, trade-offs, and v2 backlog |
+| [`MODELING_PLAN.md`](./MODELING_PLAN.md) | ML design (as implemented): split, features, metrics, drift, trade-offs, v2 backlog |
 
 ## Roadmap
 
