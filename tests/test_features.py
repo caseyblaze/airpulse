@@ -100,3 +100,14 @@ def test_wind_direction_encoded_from_lag():
     assert abs(out.loc[0, "wind_dir_cos_lag1"] - 1.0) < 1e-9
     assert abs(out.loc[1, "wind_dir_sin_lag1"] - 1.0) < 1e-9
     assert abs(out.loc[1, "wind_dir_cos_lag1"] - 0.0) < 1e-9
+
+
+from airpulse.defs.features import add_county_onehot
+
+
+def test_county_onehot_returns_columns():
+    df = pd.DataFrame({"county": ["X", "Y", "X"]})
+    out, cols = add_county_onehot(df)
+    assert set(cols) == {"county_X", "county_Y"}
+    assert out["county_X"].tolist() == [1, 0, 1] or out["county_X"].tolist() == [True, False, True]
+    assert out.loc[1, "county_Y"] in (1, True)

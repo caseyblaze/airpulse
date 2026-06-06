@@ -55,3 +55,11 @@ def add_wind_direction_features(df: pd.DataFrame) -> pd.DataFrame:
     df["wind_dir_sin_lag1"] = np.sin(rad)
     df["wind_dir_cos_lag1"] = np.cos(rad)
     return df
+
+
+def add_county_onehot(df: pd.DataFrame):
+    """One-hot encode county (~22 levels). Returns (df, new_column_names)."""
+    df = df.copy()
+    dummies = pd.get_dummies(df["county"], prefix="county")
+    df = pd.concat([df, dummies], axis=1)
+    return df, list(dummies.columns)
