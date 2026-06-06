@@ -63,3 +63,15 @@ def test_add_lag_features_shifts_within_site():
     assert a.loc[2, "pm25_lag1"] == 1.0
     assert a.loc[2, "pm25_lag2"] == 0.0
     assert a["pm25_lag1"].dropna().tolist() == [0.0, 1.0, 2.0, 3.0]
+
+
+from airpulse.defs.features import add_rolling_features
+
+
+def test_add_rolling_features_uses_only_lags():
+    df = add_lag_features(_two_site_series(), "pm25", 3)
+    df = add_rolling_features(df, "pm25", 3)
+    a = df[df.sitename == "A"].sort_values("publishtime").reset_index(drop=True)
+    assert a.loc[3, "pm25_roll3_mean"] == 1.0
+    assert pd.isna(a.loc[2, "pm25_roll3_mean"])
+    assert "pm25_roll3_std" in a.columns

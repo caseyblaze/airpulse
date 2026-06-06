@@ -20,3 +20,13 @@ def add_lag_features(df: pd.DataFrame, col: str, lags: int) -> pd.DataFrame:
     for i in range(1, lags + 1):
         df[f"{col}_lag{i}"] = df.groupby("sitename")[col].shift(i)
     return df
+
+
+def add_rolling_features(df: pd.DataFrame, col: str = "pm25", window: int = 3) -> pd.DataFrame:
+    """Mean/std over the lagged values only (leakage-safe). Requires
+    `{col}_lag1..window` to already exist."""
+    df = df.copy()
+    lag_cols = [f"{col}_lag{i}" for i in range(1, window + 1)]
+    df[f"{col}_roll{window}_mean"] = df[lag_cols].mean(axis=1, skipna=False)
+    df[f"{col}_roll{window}_std"] = df[lag_cols].std(axis=1, skipna=False)
+    return df
